@@ -165,6 +165,8 @@ fit_gam <- function(data, nclaims, x, exposure, amount = NULL, pure_premium = NU
                          exposure = data[[exposure]],
                          pure_premium = data[[pure_premium]])
 
+        if ( is.numeric(round_x) ) { df$x <- round(df$x / round_x) * round_x } # added missing rounding func in burning model #test.
+
         df <- aggregate(list(exposure = df$exposure,
                              pure_premium = df$pure_premium,
                              weighted_premium = df$exposure * df$pure_premium),
@@ -224,6 +226,133 @@ fit_gam <- function(data, nclaims, x, exposure, amount = NULL, pure_premium = NU
                         data = new,
                         x_obs = data[[x]]),
                    class = "fitgam"))
+}
+
+fit_gam_full <- function(data, xvar, nclaims, exposure, loss = NULL, pure_premium = NULL, model = "pure_premium",spline="cc"){
+
+  if (nrow(data) < 10)
+    stop("At least 10 datapoints are required. The spline smoothers assume a default of 10 degrees of freedom.")
+
+  if (!model %in% c("frequency", "severity", "pure_premium"))
+    stop("Choose correct model specification: 'frequency', 'severity' or 'pure_premium'.")
+
+  # nclaims <- deparse(substitute(nclaims))
+  # xvar <- deparse(substitute(xvar))
+  # exposure <- deparse(substitute(exposure))
+  # loss <- deparse(substitute(amlossount))
+  # pure_premium <- deparse(substitute(pure_premium))
+
+  if ( !is.numeric(data[[xvar]]) ) {
+    stop( "xvar should be numeric" )
+  }
+
+  if ( !is.numeric(data[[exposure]]) ) {
+    stop( "exposure should be numeric" )
+  }
+
+
+  if( model == "frequency" ){
+
+    df <- tryCatch(
+      {
+        df <- data.frame(nclaims = data[[nclaims]],
+                         xvar = data[[xvar]],
+                         exposure = data[[exposure]])
+
+        df <- subset(df, exposure > 0)
+        df$frequency <- df$nclaims / df$exposure
+
+        df
+      },
+      error = function(e) {
+        e$message <- "nclaims, x, and exposure should be specified for the frequency model."
+        stop(e)
+      })
+
+
+    if( sum(df$exposure == 0) > 0 )
+      stop("Exposures should be greater than zero.")
+
+    # quasi-poisson GAM
+    gam_x <- mgcv::bam(frequency ~ s(xvar, bs=spline),
+                       data = df,
+                       family = quasipoisson(link = "log"),
+                       weights = exposure)
+
+    # gam_x <- mgcv::gam(nclaims ~ s(x),
+    #                    data = df,
+    #                    family = poisson(),
+    #                    offset = log(exposure))
+
+
+  }
+
+  if( model == "severity" ){
+
+    df <- tryCatch(
+      {
+        df <- data.frame(nclaims = data[[nclaims]],
+                         xvar = data[[xvar]],
+                         exposure = data[[exposure]],
+                         loss = data[[loss]])
+
+        df <- subset(df, nclaims > 0 & loss > 0)
+
+        df$severity <- df$loss / df$nclaims
+
+        df
+      },
+      error = function(e) {
+        e$message <- "nclaims, x, exposure, and amount should be specified for the severity model."
+        stop(e)
+      })
+
+    gam_x <- mgcv::bam(severity ~ s(xvar, bs=spline),
+                       data = df,
+                       family = Gamma(link = "log"),
+                       weights = nclaims)
+
+    # # lognormal
+    # gam_x <- mgcv::gam(log(avg_claimsize) ~ s(x),
+    #                    data = df,
+    #                    family = gaussian,
+    #                    weights = nclaims)
+
+
+  }
+
+  if( model == "pure_premium" ){
+
+    df <- tryCatch(
+      {
+        df <- data.frame(xvar = data[[xvar]],
+                         exposure = data[[exposure]],
+                         pure_premium = data[[pure_premium]])
+
+        df <- subset(df, pure_premium >= 0 & exposure > 0) # tweedie constraint
+
+        df
+      },
+      error = function(e) {
+        e$message <- "xvar, exposure, and pure_premium should be specified for the pure premium model."
+        stop(e)
+      })
+
+    # tweedie with p = 1.6 (usually between 1.55 - 1.65 for our model. skip p search to reduce compute time)
+    # use bam instead of gam, do cc spline on x variable, log link, tweedie p=1.6, need to xform y later in plotting
+    gam_x <- mgcv::bam(pure_premium ~ s(xvar, bs=spline),
+                       data = df,
+                       family = Tweedie(p=1.6, link = "log"),
+                       weights = exposure) #test
+  }
+
+  # print p-value of smooth term to quickly assess overall fit
+  summ <- summary(gam_x)
+  # str(summ, max = 1)
+  pval = summ$s.pv
+  print(paste0("p-value of smooth term: ", pval))
+
+  return(gam_x) # return fitted gam object directly
 }
 
 #' @export
@@ -310,3 +439,153 @@ autoplot.fitgam <- function(object, conf_int = FALSE, color_gam = "steelblue", s
 }
 
 
+autoplot_full.fitgam <- function(gam_model, data, xvar, nclaims, exposure, loss = NULL, pure_premium = NULL, model = "pure_premium",
+                                 round_x = NULL, x_min=NULL,x_max=NULL,y_min=NULL,y_max=NULL, remove_y_outliers = NULL,
+                                 x_scale='identity',y_scale='identity', show_exposures = TRUE, show_observations = TRUE,x_stepsize = NULL,
+                                 conf_int = TRUE, color_gam_line = "red", color_points = "black", rotate_labels = FALSE, ...){
+
+  if (!requireNamespace("ggplot2", quietly = TRUE)) {
+    stop("ggplot2 is needed for this function to work. Install it via install.packages(\"ggplot2\")", call. = FALSE)
+  }
+
+  if (!requireNamespace("tidymv", quietly = TRUE)) {
+    stop("tidymv is needed for this function to work. Install it via install.packages(\"tidymv\")", call. = FALSE)
+  }
+
+  library(tidymv)
+
+  if( model == "frequency" ){
+
+    df <- tryCatch(
+      {
+        df <- data.frame(nclaims = data[[nclaims]],
+                         xvar = data[[xvar]],
+                         exposure = data[[exposure]])
+
+        if ( is.numeric(round_x) ) { df$xvar <- round(df$xvar / round_x) * round_x }
+
+        df <- aggregate(list(nclaims = df$nclaims,
+                             exposure = df$exposure),
+                        by = list(xvar = df$xvar),
+                        FUN = sum,
+                        na.rm = TRUE,
+                        na.action = NULL)
+        df <- subset(df, exposure > 0)
+        df$frequency <- df$nclaims / df$exposure
+
+        df
+      },
+      error = function(e) {
+        e$message <- "nclaims, x, and exposure should be specified for the frequency model."
+        stop(e)
+      })
+
+
+    if( sum(df$exposure == 0) > 0 )
+      stop("Exposures should be greater than zero.")
+
+  }
+
+  if( model == "severity" ){
+
+    df <- tryCatch(
+      {
+        df <- data.frame(nclaims = data[[nclaims]],
+                         xvar = data[[xvar]],
+                         exposure = data[[exposure]],
+                         loss = data[[loss]])
+
+        if ( is.numeric(round_x) ) { df$xvar <- round(df$xvar / round_x) * round_x }
+
+        df <- aggregate(list(nclaims = df$nclaims,
+                             exposure = df$exposure,
+                             loss = df$loss),
+                        by = list(xvar = df$xvar),
+                        FUN = sum,
+                        na.rm = TRUE,
+                        na.action = NULL)
+
+        df <- subset(df, nclaims > 0 & loss > 0)
+
+        df$severity <- df$loss / df$nclaims
+
+        df
+      },
+      error = function(e) {
+        e$message <- "nclaims, x, exposure, and amount should be specified for the severity model."
+        stop(e)
+      })
+
+  }
+
+  if( model == "pure_premium" ){
+
+    df <- tryCatch(
+      {
+
+        df <- data.frame(xvar = data[[xvar]],
+                         exposure = data[[exposure]],
+                         pure_premium = data[[pure_premium]])
+
+        if ( is.numeric(round_x) ) { df$xvar <- round(df$xvar / round_x) * round_x } # added missing rounding func in burning model #test.
+
+        df <- aggregate(list(exposure = df$exposure,
+                             pure_premium = df$pure_premium,
+                             weighted_premium = df$exposure * df$pure_premium),
+                        by = list(xvar = df$xvar),
+                        FUN = sum,
+                        na.rm = TRUE,
+                        na.action = NULL)
+
+        df <- subset(df, pure_premium > 0 & exposure > 0)
+
+        # Solve issue 2: df$avg_premium <- df$pure_premium / df$exposure
+        df$pure_premium <- df$weighted_premium / df$exposure
+
+        df
+      },
+      error = function(e) {
+        e$message <- "x, exposure, and pure_premium should be specified for the pure_premium model."
+        stop(e)
+      })
+  }
+  # if(isTRUE(conf_int) & sum(prediction$upr_95 > 1e9) > 0){
+  #   message("The confidence bounds are too large to show.")
+  # }
+
+  # In here, it doesn't have affect on how GAM is fitted. It will just remove points from plot. Maybe easier to set y lim?? set ylim as max y point? how about x?
+  if(is.numeric(remove_y_outliers) & isTRUE(show_observations)) {
+    if (model == "frequency") df <- df[df$frequency < remove_y_outliers, ]
+    if (model == "severity") df <- df[df$severity < remove_y_outliers, ]
+    if (model == "pure_premium") df <- df[df$pure_premium < remove_y_outliers, ]
+  }
+
+  if(isTRUE(conf_int)){ciz = 1.96} else {ciz = 0}
+
+  if(is.numeric(x_min)){x_low <- x_min} else {x_low <- quantile(x=data[[xvar]],probs=0.01,names=FALSE,na.rm=TRUE)}
+  if(is.numeric(x_max)){x_high <- x_max} else {x_high <- quantile(x=data[[xvar]],probs=0.99,names=FALSE,na.rm=TRUE)}
+  if(is.numeric(y_min)){y_low <- y_min} else {if(y_scale=='identity'){y_low <- 0} else {y_low <- quantile(x=df[[model]],probs=0.05,names=FALSE,na.rm=TRUE)*1.25}}
+  if(is.numeric(y_max)){y_high <- y_max} else {y_high <- mean(df[[model]],na.rm=TRUE)*2}
+
+  bar_scale = median(x=df[[model]],na.rm=TRUE) / max(x=df$exposure,na.rm=TRUE) * 0.7
+
+  gam_plot <- plot_smooths(gam_model,xvar,series_length = 100,transform=exp, ci_z=ciz) +
+    {if(isTRUE(show_observations)) geom_point(data = df, aes_string(x = "xvar", y = model),color = color_points)} +
+    geom_line(color = color_gam_line) + theme_bw(base_size = 12) +
+    {if(isTRUE(rotate_labels)) theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))} +
+    coord_cartesian(xlim = c(x_low,x_high), ylim = c(y_low, y_high),expand = FALSE,clip="on")+
+    {if(is.numeric(x_stepsize)) scale_x_continuous(breaks = seq(floor(x_low), ceiling(x_high), by = x_stepsize),trans = x_scale,
+                                                   minor_breaks = NULL) else scale_x_continuous(trans = x_scale,minor_breaks = NULL)} +
+    {if(model == "severity" | model == "pure_premium") scale_y_continuous(labels = scales::comma,trans = y_scale,minor_breaks = NULL) else
+      scale_y_continuous(trans = y_scale,minor_breaks = NULL)} +
+    {if(isTRUE(show_exposures) & (y_scale=='identity')) geom_bar(data = df,aes(x= xvar,y=exposure*bar_scale),
+                                                                 stat='identity',alpha=0.7,fill='#002e66',color='#002e66')} +
+    labs(y = model, x = xvar) + ggtitle(paste0(model," vs. ", xvar)) +
+    theme(plot.title = element_text(hjust = 0.5,size=18),
+          axis.title.x = element_text(size = 15),
+          axis.text.x = element_text(size = 13),
+          axis.text.y = element_text(size = 13),
+          axis.title.y = element_text(size = 15))
+
+  return(gam_plot)
+}

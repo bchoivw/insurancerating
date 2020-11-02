@@ -83,7 +83,65 @@ histbin <- function(data, x, left = NULL, right = NULL, line = FALSE, bins = 30,
   return(obj)
 }
 
+histbin2 <- function(data, xvar, left = NULL, right = NULL, line = FALSE, bins = 30,
+                     fill = "#E7B800", fill_outliers = "#a7d1a7"){
 
+
+  # xvar00 <- deparse(substitute(x))
+
+  splitsing <- split_x_fn(data, xvar, left = left, right = right)
+  nbinwidth <- diff(range(do.call(rbind, splitsing)$x)) / bins
+
+  obj <- ggplot(data = splitsing[[2]], aes(x = x))
+
+  if ( isTRUE( line )){
+    obj <- obj +
+      ggplot2::stat_density(geom = "line", aes(y = nbinwidth * ..count..), color = "dodgerblue") +
+      ggplot2::ylab("count")
+  }
+
+  obj <- obj +
+    ggplot2::geom_histogram(fill = fill,
+                            color = fill,
+                            alpha = .4,
+                            binwidth = nbinwidth) +
+    ggplot2::scale_y_continuous(expand = expansion(mult = c(0, .1)))
+
+  if ( !is.null(splitsing[[1]]) ){
+
+    ticks_for_left <- update_tickmarks_left(obj, left, round(min(data[[xvar]], na.rm = TRUE), 1))
+
+    obj <- obj +
+      ggplot2::geom_histogram(data = splitsing[[1]],
+                              fill = fill_outliers,
+                              color = ifelse(fill_outliers == "#a7d1a7", "forestgreen", fill_outliers),
+                              binwidth = nbinwidth) +
+      ggplot2::scale_x_continuous(breaks = ticks_for_left$tick_positions,
+                                  labels = ticks_for_left$tick_labels)
+  }
+
+  if ( !is.null(splitsing[[3]]) ){
+
+    ticks_for_right <- update_tickmarks_right(obj, right, round(max(data[[xvar]], na.rm = TRUE), 1))
+
+    suppressMessages(
+      obj <- obj +
+        ggplot2::geom_histogram(data = splitsing[[3]],
+                                fill = fill_outliers,
+                                color = ifelse(fill_outliers == "#a7d1a7", "forestgreen", fill_outliers),
+                                binwidth = nbinwidth) +
+        ggplot2::scale_x_continuous(breaks = ticks_for_right$tick_positions,
+                                    labels = ticks_for_right$tick_labels)
+    )
+  }
+
+  obj <- obj +
+    ggplot2::theme_minimal() +
+    ggplot2::xlab(xvar) +
+    ggplot2::geom_hline(yintercept = 0, color = "white")
+
+  return(obj)
+}
 
 
 
