@@ -83,6 +83,7 @@ histbin <- function(data, x, left = NULL, right = NULL, line = FALSE, bins = 30,
   return(obj)
 }
 
+#' @export
 histbin2 <- function(data, xvar, left = NULL, right = NULL, line = FALSE, bins = 30,
                      fill = "#E7B800", fill_outliers = "#a7d1a7"){
 

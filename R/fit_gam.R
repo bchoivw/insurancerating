@@ -228,6 +228,7 @@ fit_gam <- function(data, nclaims, x, exposure, amount = NULL, pure_premium = NU
                    class = "fitgam"))
 }
 
+#' @export
 fit_gam_full <- function(data, xvar, nclaims, exposure, loss = NULL, pure_premium = NULL, model = "pure_premium",spline="cc"){
 
   if (nrow(data) < 10)
@@ -438,7 +439,7 @@ autoplot.fitgam <- function(object, conf_int = FALSE, color_gam = "steelblue", s
   return(gam_plot)
 }
 
-
+#' @export
 autoplot_full.fitgam <- function(gam_model, data, xvar, nclaims, exposure, loss = NULL, pure_premium = NULL, model = "pure_premium",
                                  round_x = NULL, x_min=NULL,x_max=NULL,y_min=NULL,y_max=NULL, remove_y_outliers = NULL,
                                  x_scale='identity',y_scale='identity', show_exposures = TRUE, show_observations = TRUE,x_stepsize = NULL,
